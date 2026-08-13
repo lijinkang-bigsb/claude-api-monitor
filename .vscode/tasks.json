@@ -1,0 +1,40 @@
+{
+  // 指定 VS Code 任务配置文件的格式版本。
+  "version": "2.0.0",
+  // 定义本项目可执行的任务。
+  "tasks": [
+    // 此任务启动当前克隆目录中的监视器，不依赖作者电脑的绝对路径。
+    {
+      // 设置任务列表中显示的名称。
+      "label": "启动 API 监视器",
+      // 使用 VS Code 集成终端执行命令。
+      "type": "shell",
+      // 调用 Windows PowerShell 启动脚本。
+      "command": "powershell",
+      // 使用当前工作区路径，因此朋友克隆到任何目录都能运行。
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\start-monitor.ps1"],
+      // 标记为会持续运行的任务。
+      "isBackground": true,
+      // 本任务不是编译任务，因此不需要错误匹配器。
+      "problemMatcher": [],
+      // 控制终端打开方式。
+      "presentation": {
+        // 启动后显示状态面板。
+        "reveal": "always",
+        // 不抢走主界面 Claude Code 的输入焦点。
+        "focus": false,
+        // 启动前清除上一次监视器内容。
+        "clear": true,
+        // 为监视器保留一个固定终端。
+        "panel": "dedicated"
+      },
+      // 将 Ctrl+Shift+B 绑定到此任务。
+      "group": {
+        // 使用 VS Code 内置 build 快捷键类别。
+        "kind": "build",
+        // 设为该类别的默认任务。
+        "isDefault": true
+      }
+    }
+  ]
+}
