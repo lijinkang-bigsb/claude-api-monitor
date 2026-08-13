@@ -57,6 +57,16 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 开关会保存在个人 `config.json` 中，下次启动继续沿用。DSH 的识别依据是它公开且固定的 `User-Agent: deepseek-harness/版本号`；工具不会读取提示词来猜测客户端。
 
+### 让 DSH 识别这个工具
+
+仓库内的 [skills/claude-api-monitor/SKILL.md](skills/claude-api-monitor/SKILL.md) 是给 DSH 助手使用的操作说明。把整个 `claude-api-monitor` 文件夹复制到：
+
+```text
+C:\Users\你的用户名\.dsh\skills\claude-api-monitor
+```
+
+重启 DSH 或新开一个 DSH 会话后，它就能在用户明确要求时帮助启动、查看、停止和排查监视器。导入 Skill 不会启动监视器，也不会修改 DSH 的 API、密钥、模型或缓存；DSH 只有在其 API 基址被你自己设为 `http://127.0.0.1:3456` 时才会被监视器看到。
+
 ## 切换 API
 
 在 CCswitch 中正常切换即可。监视器检测到 `~/.claude/settings.json` 中的新 `ANTHROPIC_BASE_URL` 后，会：

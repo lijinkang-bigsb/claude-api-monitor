@@ -1,0 +1,7 @@
+interface:
+  display_name: "Claude API Monitor"
+  short_description: "启动、查看和排查本地 API 监视器"
+  default_prompt: "Use $claude-api-monitor to check the local Claude API monitor safely."
+
+policy:
+  allow_implicit_invocation: false
