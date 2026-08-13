@@ -45,6 +45,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 按监视器终端中的 `Ctrl+C` 可以关闭。正常关闭时，监视器会自动恢复 Claude Code 直连当前 API，避免下次使用时出现本地连接失败。
 
+监视器还会通过 Windows 任务计划程序启动一个不显示窗口的短期恢复守护进程。它不属于 VS Code 的终端进程树，因此即使使用终端垃圾桶强制结束整个任务，仍会在约一秒内把 Claude Code 恢复为直连最后一个真实 API；恢复完成后会注销临时任务并自行退出，不会长期驻留。如果 Windows 无法注册该保护，监视器会保持 Claude Code 直连而不冒险接管路由。
+
 ### 显示开关
 
 先点击监视器终端使其获得键盘焦点，然后直接按键，无需按 Enter：
@@ -76,6 +78,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ## 文件说明
 
 - `monitor.js`：本地透明代理与终端面板。
+- `guardian.js`：垃圾桶、崩溃或强制终止后的直连恢复保护。
 - `start-monitor.ps1`：日常启动脚本。
 - `setup.ps1`：首次生成本地 `config.json`。
 - `.vscode/tasks.json`：`Ctrl+Shift+B` 一键启动任务。

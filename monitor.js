@@ -8,6 +8,8 @@ const path = require('node:path'); // 导入路径模块，定位配置文件。
 
 const os = require('node:os'); // 导入操作系统模块，定位当前 Windows 用户的 Claude Code 设置文件。
 
+const childProcess = require('node:child_process'); // 导入子进程模块，启动独立的断线恢复守护进程。
+
 const readline = require('node:readline'); // 导入终端光标控制模块，兼容 VS Code 的分栏任务终端。
 
 
@@ -161,6 +163,70 @@ function restoreClaudeCodeDirectConnection() { // 关闭监视器时恢复 Claud
   } // 结束设置恢复保护。
 
 } // 结束直连恢复函数。
+
+function quoteTaskArgument(value) { // 将路径或参数安全包装成 Windows 任务计划程序命令行片段。
+
+  return '"' + String(value).replace(/"/g, '\\"') + '"'; // 用双引号保护空格并转义参数内部的双引号。
+
+} // 结束任务参数包装函数。
+
+function escapeXml(value) { // 将任务字段转义为安全的 XML 文本。
+
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); // 转义 XML 中具有语法含义的三个字符。
+
+} // 结束 XML 转义函数。
+
+function launchRecoveryGuardian() { // 通过 Windows 任务计划程序启动不属于 VS Code 进程树的恢复进程。
+
+  const guardianPath = path.join(__dirname, 'guardian.js'); // 定位与监视器同目录的守护程序。
+
+  const taskName = 'ClaudeApiMonitorGuardian-' + process.pid; // 为本次监视器创建不会与其他实例冲突的一次性任务名。
+
+  const scheduledTime = new Date(Date.now() + 60 * 60 * 1000); // 生成一小时后的备用计划时间，实际会立刻手动运行。
+
+  const startBoundary = scheduledTime.getFullYear() + '-' + String(scheduledTime.getMonth() + 1).padStart(2, '0') + '-' + String(scheduledTime.getDate()).padStart(2, '0') + 'T' + String(scheduledTime.getHours()).padStart(2, '0') + ':' + String(scheduledTime.getMinutes()).padStart(2, '0') + ':00'; // 生成任务 XML 使用的本地时间边界。
+
+  const taskArguments = [guardianPath, String(process.pid), monitorBaseUrl, taskName].map(quoteTaskArgument).join(' '); // 组合不含 Key 或提示词的守护程序参数。
+
+  const taskXmlPath = path.join(os.tmpdir(), taskName + '.xml'); // 在系统临时目录中创建短期任务定义文件。
+
+  const taskXml = '<?xml version="1.0" encoding="UTF-16"?>\n' + // 声明 Windows 任务计划程序接受的 XML 编码。
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n' + // 创建标准任务根节点。
+    '  <Triggers><TimeTrigger><StartBoundary>' + escapeXml(startBoundary) + '</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>\n' + // 添加备用的一次性时间触发器。
+    '  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>\n' + // 仅使用当前登录用户的普通权限运行。
+    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT1H</ExecutionTimeLimit><Enabled>true</Enabled></Settings>\n' + // 设置短期后台任务的运行策略。
+    '  <Actions Context="Author"><Exec><Command>' + escapeXml(process.execPath) + '</Command><Arguments>' + escapeXml(taskArguments) + '</Arguments></Exec></Actions>\n' + // 把 Node 可执行文件与参数分开保存，彻底避免空格和长度解析问题。
+    '</Task>\n'; // 结束任务 XML。
+
+  fs.writeFileSync(taskXmlPath, Buffer.from('\uFEFF' + taskXml, 'utf16le')); // 以带 BOM 的 UTF-16LE 写入 Windows 任务 XML。
+
+  const createResult = childProcess.spawnSync('schtasks.exe', ['/Create', '/TN', taskName, '/XML', taskXmlPath, '/F'], { windowsHide: true, encoding: 'utf8' }); // 从 XML 向当前 Windows 用户注册一次性恢复任务。
+
+  try { fs.unlinkSync(taskXmlPath); } catch { } // 注册后立即删除临时 XML，不留下路径信息。
+
+  if (createResult.status !== 0) { // 注册失败时不把 Claude Code 接到 3456，避免再次留下坏配置。
+
+    routingStatus = '无法注册强杀恢复保护，未接管 Claude Code'; // 在面板中明确说明请求仍保持直连。
+
+    return false; // 告诉启动流程禁止修改 Claude Code 路由。
+
+  } // 结束任务注册失败处理。
+
+  const runResult = childProcess.spawnSync('schtasks.exe', ['/Run', '/TN', taskName], { windowsHide: true, encoding: 'utf8' }); // 让 Windows 立即启动刚注册的恢复任务。
+
+  if (runResult.status !== 0) { // 任务无法启动时清除注册并保持 Claude Code 直连。
+
+    childProcess.spawnSync('schtasks.exe', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true, stdio: 'ignore' }); // 删除无法运行的临时任务。
+
+    routingStatus = '强杀恢复保护无法启动，未接管 Claude Code'; // 在面板中报告安全降级状态。
+
+    return false; // 禁止把 Claude Code 路由改成 3456。
+
+  } // 结束任务运行失败处理。
+
+  return true; // 告诉启动流程已经具备垃圾桶强杀恢复能力。
+
+} // 结束守护程序启动函数。
 
 
 
@@ -328,11 +394,13 @@ const clock = setInterval(render, 250); // 每 250 毫秒更新进行中请求�
 
 clock.unref(); // 不让刷新计时器单独阻止退出。
 
-keepClaudeCodeRoutedThroughMonitor(); // 启动时立刻把上方 Claude Code 界面接入监视器。
+const recoveryProtected = launchRecoveryGuardian(); // 在修改 Claude Code 路由前先部署强杀恢复保护。
 
-const routingClock = setInterval(keepClaudeCodeRoutedThroughMonitor, 1000); // 每秒检查一次，兼容 CCswitch 切换 API 后重写设置文件。
+if (recoveryProtected) keepClaudeCodeRoutedThroughMonitor(); // 只有 Windows 已接管恢复任务后才把上方 Claude Code 界面接入监视器。
 
-routingClock.unref(); // 不让路由检查计时器单独阻止退出。
+const routingClock = recoveryProtected ? setInterval(keepClaudeCodeRoutedThroughMonitor, 1000) : null; // 只有具备强杀恢复保护时才自动维护 CCswitch 切换后的路由。
+
+if (routingClock) routingClock.unref(); // 存在路由计时器时才解除其进程保持作用。
 
 function handleKeypress(_text, key) { // 处理监视器终端中的单键开关。
 
@@ -384,7 +452,7 @@ function close() { // 定义 Ctrl+C 的优雅关闭流程。
 
   clearInterval(clock); // 停止刷新面板。
 
-  clearInterval(routingClock); // 停止自动维护 Claude Code 路由的检查。
+  if (routingClock) clearInterval(routingClock); // 已启用路由维护时才停止对应检查。
 
   restoreClaudeCodeDirectConnection(); // 退出前恢复 Claude Code 直连，关闭监视器后仍可正常使用。
 
