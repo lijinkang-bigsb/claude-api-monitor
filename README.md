@@ -45,6 +45,16 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 按监视器终端中的 `Ctrl+C` 可以关闭。正常关闭时，监视器会自动恢复 Claude Code 直连当前 API，避免下次使用时出现本地连接失败。
 
+### 显示开关
+
+先点击监视器终端使其获得键盘焦点，然后直接按键，无需按 Enter：
+
+- `M`：暂停或恢复全部状态显示。关闭时请求仍会正常转发。
+- `D`：单独隐藏或显示 DeepSeek Harness（DSH）的请求。
+- `Ctrl+C`：关闭监视器并恢复 Claude Code 直连。
+
+开关会保存在个人 `config.json` 中，下次启动继续沿用。DSH 的识别依据是它公开且固定的 `User-Agent: deepseek-harness/版本号`；工具不会读取提示词来猜测客户端。
+
 ## 切换 API
 
 在 CCswitch 中正常切换即可。监视器检测到 `~/.claude/settings.json` 中的新 `ANTHROPIC_BASE_URL` 后，会：

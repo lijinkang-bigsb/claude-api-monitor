@@ -30,6 +30,12 @@ const port = Number(config.port || 3456); // 读取本地监听端口。
 
 const monitorBaseUrl = 'http://127.0.0.1:' + port; // 生成 Claude Code 应连接的本机监视器地址。
 
+if (!config.display || typeof config.display !== 'object') config.display = {}; // 为旧版配置补上显示开关对象。
+
+let displayEnabled = config.display.enabled !== false; // 读取总显示开关，默认显示所有可见请求。
+
+let showDshRequests = config.display.showDsh !== false; // 读取 DSH 显示开关，默认显示 DSH 请求。
+
 const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json'); // 定位 Claude Code 用户级设置文件。
 
 if (!base) { // 拒绝空的上游地址。
@@ -60,6 +66,8 @@ let displayedLines = 0; // 记录监视器上次绘制的行数，刷新时只�
 
 let routingStatus = '正在检查 Claude Code 路由…'; // 保存“上方 Claude Code 界面”是否已经接入监视器的状态。
 
+let closing = false; // 防止 Ctrl+C 和终止信号同时触发两次关闭流程。
+
 function saveUpstream(newBaseUrl) { // 记住 CCswitch 新写入的真实 API 地址。
 
   const cleanedBaseUrl = String(newBaseUrl || '').replace(/\/$/, ''); // 清除末尾斜杠，避免请求路径出现双斜杠。
@@ -79,6 +87,28 @@ function saveUpstream(newBaseUrl) { // 记住 CCswitch 新写入的真实 API �
   fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', 'utf8'); // 保存到 config.json，重启监视器后仍使用该服务商。
 
 } // 结束上游保存函数。
+
+function saveDisplayPreferences() { // 持久保存终端快捷键控制的显示开关。
+
+  config.display.enabled = displayEnabled; // 把总显示开关写入配置对象。
+
+  config.display.showDsh = showDshRequests; // 把 DSH 显示开关写入配置对象。
+
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', 'utf8'); // 保存到被 Git 忽略的个人 config.json。
+
+} // 结束显示偏好保存函数。
+
+function identifyClient(headers) { // 根据公开 User-Agent 判断请求来自哪个客户端。
+
+  const userAgent = String(headers['user-agent'] || '').toLowerCase(); // 读取不含密钥的标准客户端标识。
+
+  if (userAgent.startsWith('deepseek-harness/')) return 'DSH'; // DSH 官方代码固定使用 deepseek-harness/版本号。
+
+  if (userAgent.includes('claude-code') || userAgent.includes('claude-cli')) return 'Claude'; // 识别 Claude Code 常见客户端标识。
+
+  return '其他'; // 无稳定标识的兼容客户端归入“其他”。
+
+} // 结束客户端识别函数。
 
 function keepClaudeCodeRoutedThroughMonitor() { // 确保 CCswitch 切换模型后不会让 Claude Code 绕过监视器。
 
@@ -176,7 +206,7 @@ function one(item) { // 将一条状态记录转为终端显示的一行。
 
   const tokens = item.input === null && item.output === null ? 'token: --' : 'token: ' + (item.input ?? '?') + ' in / ' + (item.output ?? '?') + ' out'; // 组合 token 信息。
 
-  return '#' + String(item.id).padStart(3, '0') + ' | ' + item.model + ' | ' + status + ' | ' + time + ' | ' + tokens; // 返回用户所需状态格式。
+  return '#' + String(item.id).padStart(3, '0') + ' | ' + item.client + ' | ' + item.model + ' | ' + status + ' | ' + time + ' | ' + tokens; // 同时显示客户端、模型、状态和 token。
 
 } // 结束状态行函数。
 
@@ -184,11 +214,17 @@ function one(item) { // 将一条状态记录转为终端显示的一行。
 
 function render() { // 原地刷新常驻终端面板。
 
-  const running = [...active.values()].sort((a, b) => a.id - b.id).map(one); // 生成进行中的请求行。
+  const isVisible = (item) => displayEnabled && (showDshRequests || item.client !== 'DSH'); // 根据总开关和 DSH 开关决定是否显示请求。
 
-  const done = recent.slice(0, 5).map(one); // 生成最近五条已完成请求行。
+  const running = [...active.values()].filter(isVisible).sort((a, b) => a.id - b.id).map(one); // 生成过滤后的进行中请求行。
 
-  const lines = ['Claude Code API 状态小监视器  |  本地转发中  |  Ctrl+C 退出', '监听：' + monitorBaseUrl + '  →  当前上游：' + base, '路由状态：' + routingStatus, '─'.repeat(88), '进行中（' + running.length + '）', ...(running.length ? running : ['暂无请求']), '─'.repeat(88), '最近完成（最新在前）', ...(done.length ? done : ['暂无记录'])]; // 组装整块面板内容。
+  const done = recent.filter(isVisible).slice(0, 5).map(one); // 生成过滤后的最近五条已完成请求行。
+
+  const switchText = 'M 总显示：' + (displayEnabled ? '开' : '关') + '  |  D 显示 DSH：' + (showDshRequests ? '开' : '关') + '  |  Ctrl+C 退出'; // 生成可直接操作的快捷键说明。
+
+  const emptyRunningText = displayEnabled ? '暂无请求' : '状态显示已暂停；请求仍在正常转发'; // 总开关关闭时明确说明不会影响请求。
+
+  const lines = ['Claude Code API 状态小监视器  |  本地转发中', switchText, '监听：' + monitorBaseUrl + '  →  当前上游：' + base, '路由状态：' + routingStatus, '─'.repeat(88), '进行中（' + running.length + '）', ...(running.length ? running : [emptyRunningText]), '─'.repeat(88), '最近完成（最新在前）', ...(done.length ? done : ['暂无记录'])]; // 组装整块面板内容。
 
   const screen = lines.join('\n') + '\n'; // 添加终端需要的换行符。
 
@@ -242,7 +278,7 @@ const server = http.createServer((client, reply) => { // 创建本机反向代�
 
     const body = Buffer.concat(parts); // 合并并原样保留请求体。
 
-    const item = { id: serial++, model: model(body), started: Date.now(), ended: null, status: null, input: null, output: null, tail: '' }; // 创建不含正文的显示状态。
+    const item = { id: serial++, client: identifyClient(client.headers), model: model(body), started: Date.now(), ended: null, status: null, input: null, output: null, tail: '' }; // 创建不含正文、只含公开客户端类型的状态记录。
 
     active.set(item.id, item); // 登记为进行中的请求。
 
@@ -298,17 +334,69 @@ const routingClock = setInterval(keepClaudeCodeRoutedThroughMonitor, 1000); // �
 
 routingClock.unref(); // 不让路由检查计时器单独阻止退出。
 
+function handleKeypress(_text, key) { // 处理监视器终端中的单键开关。
+
+  if (!key) return; // 忽略无法识别的终端输入。
+
+  if (key.ctrl && key.name === 'c') { // 在原始输入模式下自行处理 Ctrl+C。
+
+    close(); // 执行完整的直连恢复和退出流程。
+
+    return; // 避免继续处理同一个按键。
+
+  } // 结束 Ctrl+C 判断。
+
+  if (key.name === 'm') displayEnabled = !displayEnabled; // 按 M 暂停或恢复全部状态显示。
+
+  else if (key.name === 'd') showDshRequests = !showDshRequests; // 按 D 单独隐藏或显示 DSH 请求。
+
+  else return; // 其他按键不做任何修改。
+
+  saveDisplayPreferences(); // 保存开关，下次启动仍沿用当前选择。
+
+  previous = ''; // 强制下一帧立即重绘新的开关状态。
+
+  render(); // 立刻反馈按键结果。
+
+} // 结束按键处理函数。
+
+if (process.stdin.isTTY) { // 只有真实交互终端才启用单键控制。
+
+  readline.emitKeypressEvents(process.stdin); // 让 Node.js 把键盘输入解析为按键事件。
+
+  process.stdin.setRawMode(true); // 无需按回车即可响应 M、D 和 Ctrl+C。
+
+  process.stdin.resume(); // 保持终端输入流处于可读状态。
+
+  process.stdin.on('keypress', handleKeypress); // 注册快捷键处理函数。
+
+} // 结束交互终端初始化。
+
 server.listen(port, '127.0.0.1', render); // 仅绑定本机，局域网无法访问。
 
 
 
 function close() { // 定义 Ctrl+C 的优雅关闭流程。
 
+  if (closing) return; // 已经进入关闭流程时忽略重复信号。
+
+  closing = true; // 标记监视器正在关闭。
+
   clearInterval(clock); // 停止刷新面板。
 
   clearInterval(routingClock); // 停止自动维护 Claude Code 路由的检查。
 
   restoreClaudeCodeDirectConnection(); // 退出前恢复 Claude Code 直连，关闭监视器后仍可正常使用。
+
+  if (process.stdin.isTTY) { // 仅在交互终端中恢复输入模式。
+
+    process.stdin.removeListener('keypress', handleKeypress); // 移除快捷键监听，防止退出期间再次触发。
+
+    process.stdin.setRawMode(false); // 恢复 PowerShell 正常的行输入模式。
+
+    process.stdin.pause(); // 停止读取终端输入流。
+
+  } // 结束终端输入恢复。
 
   server.close(() => process.exit(0)); // 关闭端口后退出进程。
 

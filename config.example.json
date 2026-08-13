@@ -1,4 +1,8 @@
 {
   "upstreamBaseUrl": "https://api.anthropic.com",
-  "port": 3456
+  "port": 3456,
+  "display": {
+    "enabled": true,
+    "showDsh": true
+  }
 }
